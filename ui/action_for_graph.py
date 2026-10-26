@@ -5,6 +5,9 @@ import bpy
 from bpy.types import GRAPH_MT_editor_menus, Operator
 from bpy.app import version as BL_VERSION
 
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
+from .header_tools import is_header_tool_visible
+
 
 class GRAPH_EDITOR_OT_create_action(Operator):
     bl_idname = "graph_editor.create_action"
@@ -349,6 +352,9 @@ def _draw_action_selector(context, layout):
 
 
 def draw_func(self, context):
+    if not is_header_tool_visible(context, "show_graph_action"):
+        return
+
     layout = self.layout
     row = layout.row(align=True)
 
@@ -379,8 +385,8 @@ def draw_func(self, context):
 
 
 def register():
-    GRAPH_MT_editor_menus.append(draw_func)
+    add_menu_draw_func(GRAPH_MT_editor_menus, draw_func)
 
 
 def unregister():
-    GRAPH_MT_editor_menus.remove(draw_func)
+    remove_menu_draw_func(GRAPH_MT_editor_menus, draw_func)

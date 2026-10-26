@@ -7,6 +7,7 @@ Topbar Menu Manager
 import bpy
 
 from ..operators.run_text_script import TOPBAR_MT_pluglug_run_scripts
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
 
 
 # =============================================================================
@@ -54,8 +55,8 @@ def draw_file_menu(self, context):
 
 def register():
     # Fileメニューの先頭に追加
-    bpy.types.TOPBAR_MT_file.prepend(draw_file_menu)
+    add_menu_draw_func(bpy.types.TOPBAR_MT_file, draw_file_menu, prepend=True)
 
 
 def unregister():
-    bpy.types.TOPBAR_MT_file.remove(draw_file_menu)
+    remove_menu_draw_func(bpy.types.TOPBAR_MT_file, draw_file_menu)

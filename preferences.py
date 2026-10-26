@@ -9,6 +9,7 @@ from .operators.channel_selection_overlay import ChannelSelectionOverlaySettings
 
 # TODO: Rename to pose_transform_visualizer
 from .operators.pose_rotation_visualizer import PoseTransformVisualizerSettings
+from .ui.header_tools import HeaderToolsSettings
 from .ui.playback_preview import PlaybackPreviewSettings
 from .utils.i18n import _
 from .utils.ui_utils import ic, ui_multiline_text
@@ -49,6 +50,7 @@ class MonKeyPreferences(AddonPreferences):
     overlay: PointerProperty(type=ChannelSelectionOverlaySettings)
     pose_visualizer: PointerProperty(type=PoseTransformVisualizerSettings)
     playback_preview: PointerProperty(type=PlaybackPreviewSettings)
+    header_tools: PointerProperty(type=HeaderToolsSettings)
     # logger_prefs: PointerProperty(type=MONKEY_LoggerPreferences)
 
     def draw(self, context):
@@ -103,6 +105,11 @@ class MonKeyPreferences(AddonPreferences):
         ).url = _("GITHUB_URL")
 
     def draw_settings(self, context, layout):
+        # Header Tools Visibility
+        box = layout.box()
+        box.label(text=_("HEADER_TOOLS_SETTINGS"), icon=ic("TOOL_SETTINGS"))
+        self.header_tools.draw(context, box)
+
         # Graph Editor
         box = layout.box()
         box.label(text=_("GRAPH_EDITOR_SETTINGS"), icon=ic("GRAPH"))

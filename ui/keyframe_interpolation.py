@@ -10,9 +10,15 @@ Graph Editorのトップバーに新規キーフレーム補間タイプの切�
 
 from bpy.types import GRAPH_MT_editor_menus
 
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
+from .header_tools import is_header_tool_visible
+
 
 def draw_keyframe_interpolation_toggle(self, context):
     """GRAPH_MT_editor_menusに補間タイプの切り替えボタンを追加"""
+    if not is_header_tool_visible(context, "show_graph_interpolation"):
+        return
+
     layout = self.layout
 
     prefs = context.preferences
@@ -46,8 +52,8 @@ def draw_keyframe_interpolation_toggle(self, context):
 
 
 def register():
-    GRAPH_MT_editor_menus.append(draw_keyframe_interpolation_toggle)
+    add_menu_draw_func(GRAPH_MT_editor_menus, draw_keyframe_interpolation_toggle)
 
 
 def unregister():
-    GRAPH_MT_editor_menus.remove(draw_keyframe_interpolation_toggle)
+    remove_menu_draw_func(GRAPH_MT_editor_menus, draw_keyframe_interpolation_toggle)

@@ -6,6 +6,8 @@ from bpy.types import DOPESHEET_HT_header, PropertyGroup
 
 from ..addon import get_prefs
 from ..utils.logging import get_logger
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
+from .header_tools import is_header_tool_visible
 
 log = get_logger(__name__)
 
@@ -200,6 +202,9 @@ class PlaybackPreviewSettings(PropertyGroup):
 
 
 def draw_dopesheet_header(self, context):
+    if not is_header_tool_visible(context, "show_dopesheet_playback_preview"):
+        return
+
     try:
         prefs = get_prefs(context)
         preview_settings = prefs.playback_preview
@@ -229,11 +234,10 @@ def _apply_initial_state():
 
 
 def register():
-    DOPESHEET_HT_header.append(draw_dopesheet_header)
+    add_menu_draw_func(DOPESHEET_HT_header, draw_dopesheet_header)
     _apply_initial_state()
 
 
 def unregister():
     playback_preview_manager.deactivate()
-    if draw_dopesheet_header in DOPESHEET_HT_header:
-        DOPESHEET_HT_header.remove(draw_dopesheet_header)
+    remove_menu_draw_func(DOPESHEET_HT_header, draw_dopesheet_header)

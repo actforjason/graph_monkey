@@ -7,6 +7,7 @@ from bpy.props import BoolProperty, StringProperty, EnumProperty
 from ..ui.sync_visible_range import draw_sync_visible_range
 
 from ..utils.logging import get_logger
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
 from ..keymap_manager import KeymapDefinition, keymap_registry
 from ..utils.anim_utils import (
     select_target_frame_from_list,
@@ -567,11 +568,11 @@ def register():
     if BL_VERSION >= (5, 0, 0):
         ds_ctrl = getattr(bpy.types, "DOPESHEET_HT_playback_controls", None)
         if ds_ctrl is not None:
-            ds_ctrl.prepend(draw_timeline_filter_menu)
+            add_menu_draw_func(ds_ctrl, draw_timeline_filter_menu, prepend=True)
     else:
         time_menu = getattr(bpy.types, "TIME_MT_editor_menus", None)
         if time_menu is not None:
-            time_menu.append(draw_timeline_filter_menu)
+            add_menu_draw_func(time_menu, draw_timeline_filter_menu)
 
 
 def unregister():
@@ -579,17 +580,11 @@ def unregister():
     if BL_VERSION >= (5, 0, 0):
         ds_ctrl = getattr(bpy.types, "DOPESHEET_HT_playback_controls", None)
         if ds_ctrl is not None:
-            try:
-                ds_ctrl.remove(draw_timeline_filter_menu)
-            except Exception:
-                pass
+            remove_menu_draw_func(ds_ctrl, draw_timeline_filter_menu)
     else:
         time_menu = getattr(bpy.types, "TIME_MT_editor_menus", None)
         if time_menu is not None:
-            try:
-                time_menu.remove(draw_timeline_filter_menu)
-            except Exception:
-                pass
+            remove_menu_draw_func(time_menu, draw_timeline_filter_menu)
 
     # シーンプロパティを削除
     try:

@@ -15,7 +15,9 @@ import bpy.app.handlers as handlers
 from bpy.props import FloatProperty
 from bpy.types import DOPESHEET_HT_header, Operator, Panel, Scene
 
+from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
 from ..utils.ui_utils import ic
+from .header_tools import is_header_tool_visible
 
 DEFAULT_SPEED = 1.0
 FRAME_MAP_BASE = 100
@@ -283,6 +285,9 @@ def draw_control_buttons(layout, scene):
 
 def draw_ui(self, context):
     """メインのUI描画関数"""
+    if not is_header_tool_visible(context, "show_dopesheet_playback_speed"):
+        return
+
     layout = self.layout
     scene = context.scene
 
@@ -337,15 +342,21 @@ def register():
         subtype="FACTOR",
     )
 
-    DOPESHEET_HT_header.append(draw_ui)
+    add_menu_draw_func(DOPESHEET_HT_header, draw_ui)
     handlers.load_post.append(store_range_on_load)
 
 
 def unregister():
     if hasattr(Scene, "playback_speed"):
-        bpy.context.scene.playback_speed = 1.0
+        try:
+            bpy.context.scene.playback_speed = 1.0
+        except Exception:
+            pass
 
-    DOPESHEET_HT_header.remove(draw_ui)
-    handlers.load_post.remove(store_range_on_load)
+    remove_menu_draw_func(DOPESHEET_HT_header, draw_ui)
 
-    del Scene.playback_speed
+    if store_range_on_load in handlers.load_post:
+        handlers.load_post.remove(store_range_on_load)
+
+    if hasattr(Scene, "playback_speed"):
+        del Scene.playback_speed

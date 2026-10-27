@@ -28,6 +28,7 @@ from ..keymap_manager import KeymapDefinition, keymap_registry
 from ..utils.logging import get_logger
 from .channel_selection_overlay import gen_channel_info_line, get_fcurve_display_color
 from .dopesheet_helper import get_selected_keyframes
+from .keyframe_selection import set_active_fcurve
 
 log = get_logger(__name__)
 
@@ -384,8 +385,6 @@ class GRAPH_OT_channel_navigator(bpy.types.Operator):
             return
 
         selected = get_selected_keyframes(from_fc.keyframe_points)
-        if not selected:
-            return
 
         # Deselect source fcurve
         from_fc.select = False
@@ -396,6 +395,13 @@ class GRAPH_OT_channel_navigator(bpy.types.Operator):
 
         # Select target fcurve
         to_fc.select = True
+
+        # 元チャンネルに選択キーが無いときは、フォーカス対象が消えないよう
+        # 移動先の先頭キーを選択しておく
+        if not selected:
+            if to_fc.keyframe_points:
+                to_fc.keyframe_points[0].select_control_point = True
+            return
 
         # Transfer keyframe selection to nearest keyframes
         for item in selected:
@@ -464,6 +470,13 @@ class GRAPH_OT_channel_navigator(bpy.types.Operator):
             self.bottom = vertical_margin
         if self.bottom + total_height > region_h - vertical_margin:
             self.bottom = region_h - vertical_margin - total_height
+
+        # クランプでパネルが動くと、現在のチャンネルがマウスから外れて
+        # ホバー判定が別の行を指す。マウスの Y を現在の行の中心へ戻す。
+        if self.org_idx is not None:
+            display_idx = self.display_count - 1 - (self.org_idx - self.scroll_offset)
+            self.init_mouse.y = self.bottom + display_idx * self.px_h + self.px_h / 2
+            self.mouse.y = self.init_mouse.y
 
         self.right = self.left + self.px_w
         self.top = self.bottom + total_height
@@ -621,6 +634,8 @@ class GRAPH_OT_channel_navigator(bpy.types.Operator):
 
         self.current_idx = new_idx
         self._restart_focus_animation(new_idx)
+        # ホバー中のチャンネルをアクティブにしてカーブを太く表示する
+        set_active_fcurve(to_fc, self.fcurves)
         log.debug(f"Changed to channel {new_idx}: {to_fc.data_path}")
 
         # Live focus on channel change

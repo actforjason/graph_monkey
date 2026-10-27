@@ -77,6 +77,25 @@ def is_header_tool_visible(context, setting_name: str) -> bool:
     return getattr(tools, setting_name, True)
 
 
+def get_playback_speed_visible(context) -> bool:
+    """
+    再生速度コントローラーの表示設定を取得。
+
+    Blender は設定をプロパティ名で保存するため、旧名
+    show_dopesheet_playback_speed の値は新名へ自動では移らない。
+    旧名だけが保存されている（= 読み込み後に新名が未変更の）場合は
+    初回参照時に旧名の値を引き継ぐ。
+    """
+    tools = get_header_tools(context)
+    if tools is None:
+        return True
+    legacy = tools.show_dopesheet_playback_speed
+    if legacy != tools.show_playback_speed:
+        tools.show_playback_speed = legacy
+        tools.show_dopesheet_playback_speed = legacy
+    return tools.show_playback_speed
+
+
 class HeaderToolsSettings(PropertyGroup):
     """ヘッダーツールの表示切り替え設定"""
 
@@ -100,13 +119,15 @@ class HeaderToolsSettings(PropertyGroup):
         update=_on_setting_update,
     )
 
-    # === Dope Sheet ===
-    show_dopesheet_playback_speed: BoolProperty(
+    # === Playback Controls (footer) ===
+    show_playback_speed: BoolProperty(
         name="Playback Speed Controller",
-        description="Show playback speed controls in Dope Sheet header",
+        description="Show playback speed controls in the playback controls footer",
         default=True,
         update=_on_setting_update,
     )
+
+    # === Dope Sheet ===
     show_dopesheet_playback_preview: BoolProperty(
         name="Playback Viewport Preview",
         description="Show clean playback preview toggle in Dope Sheet header",
@@ -116,6 +137,14 @@ class HeaderToolsSettings(PropertyGroup):
     show_dopesheet_sync_visible_range: BoolProperty(
         name="Sync Visible Range",
         description="Show view synchronization toggle in Dope Sheet header",
+        default=True,
+        update=_on_setting_update,
+    )
+
+    # 旧名。既存設定の値を引き継ぐためだけに残す
+    show_dopesheet_playback_speed: BoolProperty(
+        name="Playback Speed Controller (Legacy)",
+        description="Deprecated alias of show_playback_speed",
         default=True,
         update=_on_setting_update,
     )
@@ -139,11 +168,16 @@ class HeaderToolsSettings(PropertyGroup):
             self, "show_graph_sync_visible_range", text=_("HEADER_TOOLS_SYNC_RANGE")
         )
 
+        # Playback Controls（Dope Sheet / Graph Editor / NLA / Sequencer / Timeline 共通フッター）
+        col = layout.column(align=True)
+        col.label(text=_("HEADER_TOOLS_PLAYBACK_CONTROLS"), icon=ic("PLAY"))
+        box = col.box()
+        box.prop(self, "show_playback_speed", text=_("HEADER_TOOLS_PLAYBACK_SPEED"))
+
         # Dope Sheet
         col = layout.column(align=True)
         col.label(text=_("HEADER_TOOLS_DOPESHEET"), icon=ic("ACTION"))
         box = col.box()
-        box.prop(self, "show_dopesheet_playback_speed", text=_("HEADER_TOOLS_PLAYBACK_SPEED"))
         box.prop(
             self, "show_dopesheet_playback_preview", text=_("HEADER_TOOLS_PLAYBACK_PREVIEW")
         )

@@ -128,6 +128,11 @@ TRANSLATIONS = {
         "ja": "Dope Sheet ヘッダー",
         "zh": "摄影表标题栏",
     },
+    "HEADER_TOOLS_PLAYBACK_CONTROLS": {
+        "en": "Playback Controls Footer",
+        "ja": "再生コントロールフッター",
+        "zh": "播放控制栏",
+    },
     "HEADER_TOOLS_PLAYBACK_SPEED": {
         "en": "Playback Speed Controller",
         "ja": "再生速度コントローラー",

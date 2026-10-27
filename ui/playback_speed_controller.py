@@ -11,13 +11,15 @@
 # Control the playback speed of the animation
 
 import bpy
+import sys
+
 import bpy.app.handlers as handlers
 from bpy.props import FloatProperty
-from bpy.types import DOPESHEET_HT_header, Operator, Panel, Scene
+from bpy.types import Operator, Panel, Scene
 
-from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
 from ..utils.ui_utils import ic
-from .header_tools import is_header_tool_visible
+from .header_tools import get_playback_speed_visible
+
 
 DEFAULT_SPEED = 1.0
 FRAME_MAP_BASE = 100
@@ -31,6 +33,27 @@ preset_items = [
     ("1.0", "1x", ""),
     ("2.0", "2x", ""),
 ]
+
+
+# フッター右側（出力 / スナップ / フレーム範囲など）の左にも空きを入れ、
+# 中央の再生ボタン列の真ん中あたりに来るよう左右から寄せる
+class _CenteredLayoutProxy:
+    def __init__(self, layout):
+        self._layout = layout
+        self._right_done = False
+
+    def __getattr__(self, name):
+        return getattr(self._layout, name)
+
+    def row(self, *args, **kwargs):
+        # 右側ブロックはスナップ popover の row から始まる
+        if (
+            kwargs.get("panel") == "TIME_PT_playhead_snapping"
+            and not self._right_done
+        ):
+            self._right_done = True
+            self._layout.separator_spacer()
+        return self._layout.row(*args, **kwargs)
 
 
 class PlaybackController:
@@ -284,14 +307,17 @@ def draw_control_buttons(layout, scene):
 
 
 def draw_ui(self, context):
-    """メインのUI描画関数"""
-    if not is_header_tool_visible(context, "show_dopesheet_playback_speed"):
+    """メインのUI描画関数（Header の draw からも、layout を渡す形でも使う）"""
+    if not get_playback_speed_visible(context):
         return
 
-    layout = self.layout
-    scene = context.scene
+    # Graph Editor の Drivers モードはフッターがドライバー情報欄になるので出さない
+    if getattr(getattr(context, "space_data", None), "mode", None) == "DRIVERS":
+        return
 
-    # メインの横並び行
+    scene = context.scene
+    layout = getattr(self, "layout", self)
+
     row = layout.row(align=True)
 
     # ボタンの状態をチェック
@@ -327,6 +353,77 @@ def store_range_on_load(dummy):
     controller.apply_speed(bpy.context.scene.playback_speed)
 
 
+# bl_ui.space_time.playback_controls は F-Curve エディター系ヘッダーの共通描画関数。
+# 先頭に prepend するとヘッダー左端に出てしまうので、Playback ポップオーバーの直後に差し込む。
+_ORIGINAL_PLAYBACK_FUNCS = {}  # モジュール名 -> 元の playback_controls
+_PATCHED_MODULES = []  # 差し替え済みモジュール名
+
+
+def _find_playback_controls_modules():
+    """playback_controls を呼んでいる bl_ui モジュールを返す"""
+    modules = []
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("bl_ui.") and callable(getattr(mod, "playback_controls", None)):
+            modules.append(mod)
+    return modules
+
+
+def _insert_after_playback_popover(module, draw_func):
+    """
+    bl_ui.space_time.playback_controls を包み、Playback ポップオーバーの直後に
+    draw_func を描画する。module 側は同名関数を再エクスポートしているだけなので
+    各モジュールの参照も差し替える。何度呼んでも元実装は 1 回しか保持しない。
+    """
+    module_name = getattr(module, "__name__", "")
+    original = _ORIGINAL_PLAYBACK_FUNCS.get(module_name)
+    if original is None:
+        original = module.playback_controls
+        _ORIGINAL_PLAYBACK_FUNCS[module_name] = original
+
+    def patched_playback_controls(layout, context, _orig=original):
+        _orig(_CenteredLayoutProxy(_LayoutProxy(layout, draw_func, context)), context)
+
+    module.playback_controls = patched_playback_controls
+    if module_name not in _PATCHED_MODULES:
+        _PATCHED_MODULES.append(module_name)
+
+
+class _LayoutProxy:
+    """Playback ポップオーバーの直後に draw_func を描くための layout プロキシ"""
+
+    def __init__(self, layout, draw_func, context):
+        self._layout = layout
+        self._draw_func = draw_func
+        self._context = context
+        self._after_playback = False
+
+    def __getattr__(self, name):
+        return getattr(self._layout, name)
+
+    def popover(self, *args, **kwargs):
+        result = self._layout.popover(*args, **kwargs)
+        panel = kwargs.get("panel", args[0] if args else None)
+        if panel == "TIME_PT_playback":
+            self._after_playback = True
+        return result
+
+    def _draw_once(self):
+        if not self._after_playback:
+            return
+        self._after_playback = False
+        self._layout.separator_spacer()
+        self._draw_func(self._layout, self._context)
+
+    def row(self, *args, **kwargs):
+        # popover 直後に来る最初の row() のタイミングで描く
+        self._draw_once()
+        return self._layout.row(*args, **kwargs)
+
+    def separator_spacer(self):
+        self._draw_once()
+        return self._layout.separator_spacer()
+
+
 def register():
     Scene.playback_speed = FloatProperty(
         name="Playback Speed",
@@ -342,7 +439,9 @@ def register():
         subtype="FACTOR",
     )
 
-    add_menu_draw_func(DOPESHEET_HT_header, draw_ui)
+    # 未ロードの bl_ui モジュールは対象外。失敗しても他の機能は止めない
+    for module in _find_playback_controls_modules():
+        _insert_after_playback_popover(module, draw_ui)
     handlers.load_post.append(store_range_on_load)
 
 
@@ -353,7 +452,12 @@ def unregister():
         except Exception:
             pass
 
-    remove_menu_draw_func(DOPESHEET_HT_header, draw_ui)
+    for name in _PATCHED_MODULES:
+        module = sys.modules.get(name)
+        if module is not None and name in _ORIGINAL_PLAYBACK_FUNCS:
+            module.playback_controls = _ORIGINAL_PLAYBACK_FUNCS[name]
+    _PATCHED_MODULES.clear()
+    _ORIGINAL_PLAYBACK_FUNCS.clear()
 
     if store_range_on_load in handlers.load_post:
         handlers.load_post.remove(store_range_on_load)

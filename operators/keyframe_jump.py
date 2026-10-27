@@ -4,8 +4,6 @@ from bpy.app import version as BL_VERSION
 from bpy.types import Operator, Context
 from bpy.props import BoolProperty, StringProperty, EnumProperty
 
-from ..ui.sync_visible_range import draw_sync_visible_range
-
 from ..utils.logging import get_logger
 from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
 from ..keymap_manager import KeymapDefinition, keymap_registry
@@ -246,13 +244,21 @@ def draw_timeline_filter_menu(menu, context: Context):
 
     if BL_VERSION < (5, 0, 0):
         layout.separator()
-    else:
-        sd = getattr(context, "space_data", None)
-        if not getattr(sd, "show_region_header", True):
-            draw_sync_visible_range(menu, context)
 
     layout.prop(context.scene, "monkey_keyframe_filter_type", text="", icon_only=True)
     BL_VERSION < (5, 0, 0) and layout.separator()
+
+
+def is_playback_controls_header(context) -> bool:
+    """ctx.region が再生コントロール（フッター）か判定。ヘッダーなら False"""
+    return getattr(getattr(context, "region", None), "type", None) == "FOOTER"
+
+
+def draw_dopesheet_playback_filter(self, context: Context):
+    # フィルターはヘッダーに置く。フッターではスキップ
+    if is_playback_controls_header(context):
+        return
+    draw_timeline_filter_menu(self, context)
 
 
 class MONKEY_OT_KEYFRAME_PEEK(Operator):
@@ -564,11 +570,9 @@ def register():
     except Exception:
         pass
 
-    # 5.0 以上は Dope Sheet の再生コントロールへ、未満は旧 Timeline へ
+    # 5.0 以上は Dope Sheet ヘッダーへ（旧 Timeline から移行）、未満は旧 Timeline へ
     if BL_VERSION >= (5, 0, 0):
-        ds_ctrl = getattr(bpy.types, "DOPESHEET_HT_playback_controls", None)
-        if ds_ctrl is not None:
-            add_menu_draw_func(ds_ctrl, draw_timeline_filter_menu, prepend=True)
+        add_menu_draw_func(bpy.types.DOPESHEET_HT_header, draw_dopesheet_playback_filter)
     else:
         time_menu = getattr(bpy.types, "TIME_MT_editor_menus", None)
         if time_menu is not None:
@@ -576,11 +580,9 @@ def register():
 
 
 def unregister():
-    # 5.0 以上は Dope Sheet から、未満は旧 Timeline から削除
+    # 5.0 以上は Dope Sheet ヘッダーから、未満は旧 Timeline から削除
     if BL_VERSION >= (5, 0, 0):
-        ds_ctrl = getattr(bpy.types, "DOPESHEET_HT_playback_controls", None)
-        if ds_ctrl is not None:
-            remove_menu_draw_func(ds_ctrl, draw_timeline_filter_menu)
+        remove_menu_draw_func(bpy.types.DOPESHEET_HT_header, draw_dopesheet_playback_filter)
     else:
         time_menu = getattr(bpy.types, "TIME_MT_editor_menus", None)
         if time_menu is not None:

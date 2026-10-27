@@ -1,9 +1,54 @@
 # pyright: reportInvalidTypeForm=false
+import ctypes
+
 import bpy
 from bpy.types import Operator
 from bpy.props import BoolProperty
 
 from ..keymap_manager import KeymapDefinition, keymap_registry
+
+# graph.view_selected の垂直余白は 1.1 倍で固定（graph_view.cc）。
+# RegionView2D.cur は RNA に出ていないので、表示領域の下端から位置を特定して広げる。
+_VERTICAL_MARGIN_SCALE = 1.5
+_VIEW2D_CUR_SPAN = 64
+_view2d_cur_offset = None
+
+
+def _view2d_cur(view2d):
+    """view2d.cur (xmin, xmax, ymin, ymax) を指す c_float*4。位置不明なら None"""
+    global _view2d_cur_offset
+    base = view2d.as_pointer()
+    if _view2d_cur_offset is None:
+        # 表示領域の下端は cur.ymin と一致する
+        _, ymin = view2d.region_to_view(0, 0)
+        buf = (ctypes.c_float * _VIEW2D_CUR_SPAN).from_address(base)
+        hits = [index for index in range(_VIEW2D_CUR_SPAN) if buf[index] == ymin]
+        if len(hits) != 1:
+            return None
+        _view2d_cur_offset = (hits[0] - 2) * ctypes.sizeof(ctypes.c_float)
+    try:
+        return (ctypes.c_float * 4).from_address(base + _view2d_cur_offset)
+    except (ValueError, ctypes.ArgumentError):
+        _view2d_cur_offset = None
+        return None
+
+
+def widen_vertical_margin(context, scale=_VERTICAL_MARGIN_SCALE):
+    """フォーカス後の表示範囲を垂直方向に広げる。範囲の中心は維持する"""
+    area = context.area
+    if area is None:
+        return
+    region = next((r for r in area.regions if r.type == "WINDOW"), None)
+    if region is None:
+        return
+    cur = _view2d_cur(region.view2d)
+    if cur is None:
+        return
+    center = (cur[2] + cur[3]) / 2
+    half = (cur[3] - cur[2]) / 2 * scale
+    cur[2] = center - half
+    cur[3] = center + half
+    region.tag_redraw()
 
 
 class GRAPH_OT_view_selected_curves_range(Operator):
@@ -92,6 +137,7 @@ class GRAPH_OT_view_selected_curves_range(Operator):
 
         # graph.view_selectedを実行してフォーカス
         bpy.ops.graph.view_selected(include_handles=self.include_handles)
+        widen_vertical_margin(context)
 
         # 元の選択状態に戻す
         # 一時選択を行った場合のみ復元する

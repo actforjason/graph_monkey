@@ -1,4 +1,6 @@
 # pyright: reportInvalidTypeForm=false
+import ctypes
+
 import bpy
 
 from ..addon import get_prefs
@@ -11,6 +13,63 @@ from .dopesheet_helper import (
 from ..keymap_manager import KeymapDefinition, keymap_registry
 
 log = get_logger(__name__)
+
+# F-Curve の flag は RNA に出ていない short。select ビットを反転させて位置を特定する。
+# 構造体レイアウトに依存するので、Blender のバージョンで flag の並びが変わると無効になる。
+_FCURVE_SELECTED = 1 << 1
+_FCURVE_ACTIVE = 1 << 2
+_FCURVE_FLAG_SPAN = 256
+_fcurve_flag_offset = None
+
+
+def _locate_fcurve_flag_offset(fcurve):
+    """select を反転させ、値が _FCURVE_SELECTED だけ変わる short の位置を返す"""
+    base = fcurve.as_pointer()
+    selected = fcurve.select
+    before = (ctypes.c_short * _FCURVE_FLAG_SPAN).from_address(base)[:]
+    try:
+        fcurve.select = not selected
+        after = (ctypes.c_short * _FCURVE_FLAG_SPAN).from_address(base)[:]
+    finally:
+        fcurve.select = selected
+
+    hits = [
+        index
+        for index, (old, new) in enumerate(zip(before, after))
+        if abs(old - new) == _FCURVE_SELECTED
+    ]
+    if len(hits) != 1:
+        log.warning(f"FCurve flag offset not found (hits: {len(hits)})")
+        return None
+    return hits[0] * ctypes.sizeof(ctypes.c_short)
+
+
+def _fcurve_flag(fcurve):
+    """FCurve.flag を指す c_short。位置不明やポインタ無効なら None"""
+    global _fcurve_flag_offset
+    if _fcurve_flag_offset is None:
+        _fcurve_flag_offset = _locate_fcurve_flag_offset(fcurve)
+        if _fcurve_flag_offset is None:
+            return None
+    try:
+        return ctypes.c_short.from_address(fcurve.as_pointer() + _fcurve_flag_offset)
+    except (ValueError, ctypes.ArgumentError):
+        _fcurve_flag_offset = None
+        return None
+
+
+def set_active_fcurve(fcurve, candidates):
+    """候補の中で fcurve だけをアクティブにする。失敗しても選択処理は続行する"""
+    target = _fcurve_flag(fcurve)
+    if target is None:
+        return
+    for candidate in candidates:
+        if candidate.as_pointer() == fcurve.as_pointer():
+            continue
+        flag = _fcurve_flag(candidate)
+        if flag is not None:
+            flag.value &= ~_FCURVE_ACTIVE
+    target.value |= _FCURVE_ACTIVE
 
 
 # Keyframe selection moving operators
@@ -249,6 +308,19 @@ def move_channel_selection_vertically(direction="downward", extend=False):
         if 0 <= next_index < num_fcurves:
             next_fcurve = all_fcurves[next_index]
             process_keyframe_selection_for_vertical_move(fcurve, next_fcurve, extend)
+
+    # 移動先の先頭チャンネルをアクティブにしてカーブを太く表示する。
+    # 下方向は一番下、上方向は一番上が移動の先端になる。
+    if extend:
+        edge_index = max(selected_indices) if direction == "downward" else min(selected_indices)
+    else:
+        edge_index = selected_indices[0]
+    if direction == "downward":
+        edge_index += 1
+    else:
+        edge_index -= 1
+    if 0 <= edge_index < num_fcurves:
+        set_active_fcurve(all_fcurves[edge_index], all_fcurves)
 
 
 def process_keyframe_selection_for_vertical_move(fcurve_from, fcurve_to, extend=False):

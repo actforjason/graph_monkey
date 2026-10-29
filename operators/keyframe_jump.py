@@ -1,8 +1,9 @@
 # pyright: reportInvalidTypeForm=false
+import math
 import bpy
 from bpy.app import version as BL_VERSION
 from bpy.types import Operator, Context
-from bpy.props import BoolProperty, StringProperty, EnumProperty
+from bpy.props import BoolProperty, StringProperty, EnumProperty, IntProperty
 
 from ..utils.logging import get_logger
 from ..utils.menu_utils import add_menu_draw_func, remove_menu_draw_func
@@ -10,13 +11,21 @@ from ..keymap_manager import KeymapDefinition, keymap_registry
 from ..utils.anim_utils import (
     select_target_frame_from_list,
     find_timeline_area,
-    get_allowed_frames_in_range_cached,
     invalidate_allowed_frames_cache,
+    get_timeline_remapping_ratio,
+    get_remapped_allowed_frames_cached,
 )
 from ..constants import KEYFRAME_TYPE_FLAGS
 
 
 log = get_logger(__name__)
+
+
+def get_active_timeline_range(scene: bpy.types.Scene) -> tuple[int, int]:
+    """現在のタイムライン表示範囲（プレビューまたは通常範囲）を取得。"""
+    if scene.use_preview_range:
+        return int(scene.frame_preview_start), int(scene.frame_preview_end)
+    return int(scene.frame_start), int(scene.frame_end)
 
 
 def keyframe_jump_in_timeline(context: Context, go_next: bool) -> None:
@@ -79,83 +88,68 @@ class MONKEY_OT_JUMP_WITHIN_RANGE(Operator):
     # ===========================================
 
     def _setup_frame_range(self, context: Context):
-        """フレーム範囲の設定"""
-        scene = context.scene
-        if scene.use_preview_range:
-            self.start_frame = scene.frame_preview_start
-            self.end_frame = scene.frame_preview_end
-        else:
-            self.start_frame = scene.frame_start
-            self.end_frame = scene.frame_end
+        """フレーム範囲の設定（現在のタイムライン表示範囲）"""
+        self.start_frame, self.end_frame = get_active_timeline_range(context.scene)
 
     def _execute_keyframe_jump(self, context: Context) -> bool:
-        """キーフレームジャンプの実行（フィルタ有りは直接ターゲットへ、無しは通常ジャンプ）"""
+        """キーフレームジャンプの実行（可視Fカーブ基準で直接移動、無ければ通常ジャンプへ委譲）"""
         scene = context.scene
         allowed_types = self._parse_allowed_key_types(context)
 
-        # フィルタ未指定: 既存のBlenderオペレーターに委譲
-        if not allowed_types:
-            try:
-                # View3Dからでもタイムラインの可視キー基準でジャンプさせる
-                keyframe_jump_in_timeline(context, self.next)
-                return True
-            except RuntimeError as e:
-                log.warning(f"keyframe_jump failed in {context.area.ui_type}: {e}")
-                if self.next:
-                    bpy.ops.screen.frame_offset(delta=1)
-                else:
-                    bpy.ops.screen.frame_offset(delta=-1)
-                return False
-
-        # フィルタ指定: 可視Fカーブから許可タイプのフレームを抽出して直接移動
-        allowed_frames = get_allowed_frames_in_range_cached(
+        # 可視Fカーブから許可タイプのフレームを抽出（調速倍率も自動換算）
+        allowed_frames = get_remapped_allowed_frames_cached(
             context,
             self.start_frame,
             self.end_frame,
             allowed_types,
         )
-        if not allowed_frames:
+        if allowed_frames:
+            current = scene.frame_current
+            target = select_target_frame_from_list(
+                allowed_frames, current, self.next, self.loop
+            )
+            if target is not None:
+                scene.frame_set(target)
             return True
 
-        current = scene.frame_current
-        target = select_target_frame_from_list(
-            allowed_frames, current, self.next, self.loop
-        )
-        if target is None:
+        # 可視Fカーブが取得できない場合のフォールバック: Blender通常ジャンプ
+        try:
+            keyframe_jump_in_timeline(context, self.next)
             return True
-
-        scene.frame_set(target)
-        return True
+        except RuntimeError as e:
+            log.warning(f"keyframe_jump failed in {context.area.ui_type}: {e}")
+            if self.next:
+                bpy.ops.screen.frame_offset(delta=1)
+            else:
+                bpy.ops.screen.frame_offset(delta=-1)
+            return False
 
     def _handle_loop_jump(self, context: Context):
         """ループ処理：範囲の逆端に移動してキーフレームをチェック"""
         scene = context.scene
         allowed_types = self._parse_allowed_key_types(context)
 
-        # フィルタ未指定: 従来動作（端へ移動→通常ジャンプ）
-        if not allowed_types:
-            if self.next:
-                scene.frame_set(self.start_frame)
-            else:
-                scene.frame_set(self.end_frame)
-            if self._has_visible_keyframe_at_current_frame(context, None):
-                return
-            self._execute_keyframe_jump(context)
-            return
-
-        # フィルタ指定: 端に寄せず、リストから直接選択（先頭/末尾）
-        allowed_frames = get_allowed_frames_in_range_cached(
+        allowed_frames = get_remapped_allowed_frames_cached(
             context,
             self.start_frame,
             self.end_frame,
             allowed_types,
         )
-        if not allowed_frames:
+        if allowed_frames:
+            if self.next:
+                scene.frame_set(allowed_frames[0])
+            else:
+                scene.frame_set(allowed_frames[-1])
             return
+
+        # フォールバック
         if self.next:
-            scene.frame_set(allowed_frames[0])
+            scene.frame_set(self.start_frame)
         else:
-            scene.frame_set(allowed_frames[-1])
+            scene.frame_set(self.end_frame)
+        if self._has_visible_keyframe_at_current_frame(context, None):
+            return
+        self._execute_keyframe_jump(context)
 
     # ===========================================
     # キーフレーム検出メソッド
@@ -367,23 +361,19 @@ class MONKEY_OT_KEYFRAME_PEEK(Operator):
 
     def _get_base_keyframe_position(self, context):
         """基本のキーフレーム位置（初期ジャンプ先）を取得"""
-        # オリジナルフレームに戻って、初期ジャンプを実行
         context.scene.frame_set(self.original_frame)
-        # フィルタ対応：選択されているキータイプがある場合はそのリストから直接算出
         allowed_types = self._parse_allowed_key_types(context)
-        if allowed_types:
-            start, end = self._get_frame_range(context)
-            frames = get_allowed_frames_in_range_cached(
-                context, start, end, allowed_types
-            )
-            if frames:
-                current = context.scene.frame_current
-                target = select_target_frame_from_list(frames, current, self.next, True)
-                if target is not None:
-                    context.scene.frame_set(target)
-                    return context.scene.frame_current
+        start, end = self._get_frame_range(context)
+        frames = get_remapped_allowed_frames_cached(
+            context, start, end, allowed_types
+        )
+        if frames:
+            current = context.scene.frame_current
+            target = select_target_frame_from_list(frames, current, self.next, True)
+            if target is not None:
+                context.scene.frame_set(target)
+                return context.scene.frame_current
 
-        # フィルタ未指定または候補なし: 通常のジャンプ
         keyframe_jump_in_timeline(context, self.next)
         return context.scene.frame_current
 
@@ -394,13 +384,11 @@ class MONKEY_OT_KEYFRAME_PEEK(Operator):
         direction_next = offset > 0
         steps = abs(offset)
 
-        if allowed_types:
-            start, end = self._get_frame_range(context)
-            frames = get_allowed_frames_in_range_cached(
-                context, start, end, allowed_types
-            )
-            if not frames:
-                return context.scene.frame_current
+        start, end = self._get_frame_range(context)
+        frames = get_remapped_allowed_frames_cached(
+            context, start, end, allowed_types
+        )
+        if frames:
             cursor = base_frame
             for _ in range(steps):
                 nxt = select_target_frame_from_list(
@@ -412,7 +400,6 @@ class MONKEY_OT_KEYFRAME_PEEK(Operator):
             context.scene.frame_set(int(cursor))
             return context.scene.frame_current
 
-        # フィルタ未指定: 従来のジャンプを繰り返し
         for _ in range(steps):
             keyframe_jump_in_timeline(context, direction_next)
         return context.scene.frame_current
@@ -459,10 +446,7 @@ class MONKEY_OT_KEYFRAME_PEEK(Operator):
         return min(self.original_frame - 1, target_frame)
 
     def _get_frame_range(self, context: Context) -> tuple[int, int]:
-        scene = context.scene
-        if scene.use_preview_range:
-            return int(scene.frame_preview_start), int(scene.frame_preview_end)
-        return int(scene.frame_start), int(scene.frame_end)
+        return get_active_timeline_range(context.scene)
 
     def _parse_allowed_key_types(self, context: Context) -> set[str]:
         value = getattr(context.scene, "monkey_keyframe_filter_type", None)
@@ -476,9 +460,48 @@ class MONKEY_OT_KEYFRAME_PEEK(Operator):
             return set()
 
 
+class MONKEY_OT_FRAME_OFFSET(Operator):
+    bl_idname = "screen.monkey_frame_offset"
+    bl_label = "Frame Offset (Speed Aware)"
+    bl_description = "Step frames matching original playback speed timing"
+    bl_options = {"INTERNAL"}
+
+    delta: IntProperty(default=1, options={"SKIP_SAVE"})
+    loop: BoolProperty(default=True, options={"SKIP_SAVE"})
+
+    def execute(self, context: Context):
+        scene = context.scene
+        ratio = get_timeline_remapping_ratio(scene)
+        start_frame, end_frame = get_active_timeline_range(scene)
+
+        if abs(ratio - 1.0) < 1e-4 and not self.loop:
+            bpy.ops.screen.frame_offset(delta=self.delta)
+            return {"FINISHED"}
+
+        raw_cur = scene.frame_current / ratio
+        if self.delta > 0:
+            target_raw = math.floor(raw_cur + 1e-4) + self.delta
+        else:
+            target_raw = math.ceil(raw_cur - 1e-4) + self.delta
+
+        target_frame = int(round(target_raw * ratio))
+
+        if self.loop:
+            if target_frame > end_frame:
+                target_frame = start_frame
+            elif target_frame < start_frame:
+                target_frame = end_frame
+        else:
+            target_frame = max(start_frame, min(end_frame, target_frame))
+
+        scene.frame_set(target_frame)
+        return {"FINISHED"}
+
+
 KEYFRAME_JUMP_KEYMAPS = [
     ("Frames", "EMPTY"),
     ("Object Mode", "EMPTY"),
+    ("Pose", "EMPTY"),
 ]
 
 keymap_definitions = []
@@ -486,22 +509,22 @@ keymap_definitions = []
 for keymap_name, keymap_space_type in KEYFRAME_JUMP_KEYMAPS:
     keymap_definitions.append(
         KeymapDefinition(
-            operator_id="screen.frame_offset",  # Built-in operator
+            operator_id="screen.monkey_frame_offset",  # Speed-aware operator
             key="ONE",
             value="PRESS",
             repeat=True,
-            properties={"delta": -1},
+            properties={"delta": -1, "loop": True},
             name=keymap_name,
             space_type=keymap_space_type,
         )
     )
     keymap_definitions.append(
         KeymapDefinition(
-            operator_id="screen.frame_offset",  # Built-in operator
+            operator_id="screen.monkey_frame_offset",  # Speed-aware operator
             key="TWO",
             value="PRESS",
             repeat=True,
-            properties={"delta": 1},
+            properties={"delta": 1, "loop": True},
             name=keymap_name,
             space_type=keymap_space_type,
         )

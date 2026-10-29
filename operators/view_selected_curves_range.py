@@ -89,8 +89,10 @@ class GRAPH_OT_view_selected_curves_range(Operator):
                 frame_start = scene.frame_preview_start
                 frame_end = scene.frame_preview_end
             else:
-                frame_start = scene.frame_start
-                frame_end = scene.frame_end
+                orig_start = scene.get("original_start")
+                orig_end = scene.get("original_end")
+                frame_start = int(orig_start) if orig_start is not None else scene.frame_start
+                frame_end = int(orig_end) if orig_end is not None else scene.frame_end
         else:
             frame_start = float("-inf")
             frame_end = float("inf")

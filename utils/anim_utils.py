@@ -1,7 +1,7 @@
 # pyright: reportInvalidTypeForm=false
 from __future__ import annotations
 
-from typing import List, Set, Tuple, Optional
+from typing import Any, List, Set, Tuple, Optional
 from time import perf_counter
 from collections import deque
 from bpy.types import Context, Area
@@ -40,8 +40,8 @@ def _collect_visible_frames_from_context(
         return frames
     for fcurve in visible_fcurves:
         for kp in fcurve.keyframe_points:
-            if getattr(kp, "type", None) in allowed_types:
-                frame_int = int(kp.co.x)
+            if not allowed_types or getattr(kp, "type", None) in allowed_types:
+                frame_int = int(round(kp.co.x))
                 if start_frame <= frame_int <= end_frame:
                     frames.add(frame_int)
     return frames
@@ -163,3 +163,44 @@ def get_allowed_frames_in_range_cached(
 def invalidate_allowed_frames_cache() -> None:
     """キャッシュを明示的に無効化。"""
     _frames_cache.clear()
+
+
+def get_timeline_remapping_ratio(scene: Any) -> float:
+    """フレーム再マッピング倍率を取得（通常時は 1.0）。"""
+    render = getattr(scene, "render", None)
+    if not render:
+        return 1.0
+    old = getattr(render, "frame_map_old", 100)
+    new = getattr(render, "frame_map_new", 100)
+    if old > 0 and new > 0 and old != new:
+        return new / old
+    return 1.0
+
+
+def get_remapped_allowed_frames_cached(
+    context: Context,
+    start_frame: int,
+    end_frame: int,
+    allowed_types: Set[str],
+) -> List[int]:
+    """タイムライン再マッピング倍率を考慮した許可フレームリストを取得。"""
+    scene = context.scene
+    ratio = get_timeline_remapping_ratio(scene)
+    if abs(ratio - 1.0) < 1e-4:
+        return get_allowed_frames_in_range_cached(
+            context, start_frame, end_frame, allowed_types
+        )
+
+    raw_start = int(round(start_frame / ratio))
+    raw_end = int(round(end_frame / ratio))
+    if raw_start > raw_end:
+        raw_start, raw_end = raw_end, raw_start
+
+    raw_frames = get_allowed_frames_in_range_cached(
+        context, raw_start, raw_end, allowed_types
+    )
+    if not raw_frames:
+        return []
+
+    remapped = {int(round(f * ratio)) for f in raw_frames}
+    return sorted(remapped)

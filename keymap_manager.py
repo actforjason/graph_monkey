@@ -198,6 +198,7 @@ class KeymapRegistry:
 
         wm = context.window_manager
         kc = wm.keyconfigs.user
+        kc_addon = getattr(wm.keyconfigs, "addon", None)
 
         if not wm or not kc:
             layout.label(text="User keyconfig is not available")
@@ -236,23 +237,33 @@ class KeymapRegistry:
         handled_kmi = set()
 
         for km_name, kmi_items in km_tree.items():
-            km = kc.keymaps.get(km_name)
-            if km:
-                for kmi_node in kmi_items:
+            km_u = kc.keymaps.get(km_name)
+            km_a = kc_addon.keymaps.get(km_name) if kc_addon else None
+            for kmi_node in kmi_items:
+                kmi = None
+                target_kc = kc
+                target_km = km_u
+                if km_u:
                     kmi = self.get_hotkey_entry_item(
-                        km, kmi_node[0], kmi_node[1], handled_kmi
+                        km_u, kmi_node[0], kmi_node[1], handled_kmi
                     )
-                    if kmi:
-                        handled_kmi.add(kmi)
-                        p_collision_kmi = self.get_kmi_collision(kc, km, kmi)
-                        if p_collision_kmi:
-                            t_collisions[km_name].append(
-                                (
-                                    kmi.to_string(),
-                                    f" - {p_collision_kmi.name}({p_collision_kmi.idname})",
-                                    kmi,
-                                )
+                if not kmi and km_a:
+                    kmi = self.get_hotkey_entry_item(
+                        km_a, kmi_node[0], kmi_node[1], handled_kmi
+                    )
+                    target_kc = kc_addon
+                    target_km = km_a
+                if kmi and target_km:
+                    handled_kmi.add(kmi)
+                    p_collision_kmi = self.get_kmi_collision(target_kc, target_km, kmi)
+                    if p_collision_kmi:
+                        t_collisions[km_name].append(
+                            (
+                                kmi.to_string(),
+                                f" - {p_collision_kmi.name}({p_collision_kmi.idname})",
+                                kmi,
                             )
+                        )
 
         # 衝突がある場合は警告表示
         if t_collisions:
@@ -285,7 +296,9 @@ class KeymapRegistry:
             km_names = list({kd.name for kd in keymap_defs})
 
             for km_name in km_names:
-                km = kc.keymaps.get(km_name)
+                km_user = kc.keymaps.get(km_name)
+                km_addon = kc_addon.keymaps.get(km_name) if kc_addon else None
+                km = km_user or km_addon
                 if not km:
                     row = group_box.row()
                     row.label(text=f"Keymap '{km_name}' not found", icon=ic("ERROR"))
@@ -307,28 +320,23 @@ class KeymapRegistry:
 
                 # 削除されたアイテムをチェック
                 for keymap_def in related_keymaps:
-                    kmi = self.get_hotkey_entry_item(
-                        km,
-                        keymap_def.operator_id,
-                        (
-                            getattr(keymap_def.properties, "name", None)
-                            if keymap_def.properties and "name" in keymap_def.properties
-                            else None
-                        ),
-                        set(),
+                    name_prop = (
+                        getattr(keymap_def.properties, "name", None)
+                        if keymap_def.properties and "name" in keymap_def.properties
+                        else None
                     )
+                    kmi = None
+                    if km_user:
+                        kmi = self.get_hotkey_entry_item(
+                            km_user, keymap_def.operator_id, name_prop, set()
+                        )
+                    if not kmi and km_addon:
+                        kmi = self.get_hotkey_entry_item(
+                            km_addon, keymap_def.operator_id, name_prop, set()
+                        )
                     if not kmi:
                         b_has_deleted = True
                         break
-
-                # # 復元ボタン (まずアドオン内のkmiを復元。次に警告を出したうえでユーザーのkmを復元)
-                # if b_modified or b_has_deleted:
-                #     subrow = header_row.row()
-                #     subrow.alignment = "RIGHT"
-                #     s_restore_caption = "キーマップを復元" if b_has_deleted else "復元"
-                #     s_icon = ic("FILE_REFRESH") if b_has_deleted else ic("BACK")
-                #     # 実際の復元機能は今回は省略（オペレータが必要）
-                #     subrow.label(text=s_restore_caption, icon=s_icon)
 
                 keymap_box.context_pointer_set("keymap", km)
 
@@ -337,21 +345,42 @@ class KeymapRegistry:
 
                 # まず、このグループに関連するkmiを表示
                 for keymap_def in related_keymaps:
-                    kmi = self.get_hotkey_entry_item(
-                        km,
-                        keymap_def.operator_id,
-                        (
-                            getattr(keymap_def.properties, "name", None)
-                            if keymap_def.properties and "name" in keymap_def.properties
-                            else None
-                        ),
-                        handled_kmi_for_display,
+                    name_prop = (
+                        getattr(keymap_def.properties, "name", None)
+                        if keymap_def.properties and "name" in keymap_def.properties
+                        else None
                     )
-                    if kmi:
+                    kmi = None
+                    target_km = None
+                    target_kc = None
+
+                    if km_user:
+                        kmi = self.get_hotkey_entry_item(
+                            km_user,
+                            keymap_def.operator_id,
+                            name_prop,
+                            handled_kmi_for_display,
+                        )
+                        if kmi:
+                            target_km = km_user
+                            target_kc = kc
+
+                    if not kmi and km_addon:
+                        kmi = self.get_hotkey_entry_item(
+                            km_addon,
+                            keymap_def.operator_id,
+                            name_prop,
+                            handled_kmi_for_display,
+                        )
+                        if kmi:
+                            target_km = km_addon
+                            target_kc = kc_addon
+
+                    if kmi and target_km and target_kc:
                         handled_kmi_for_display.add(kmi)
 
                         # 衝突チェック
-                        p_collision_kmi = self.get_kmi_collision(kc, km, kmi)
+                        p_collision_kmi = self.get_kmi_collision(target_kc, target_km, kmi)
                         subcol = keymap_box
                         if p_collision_kmi:
                             collision_row = subcol.row(align=True)
@@ -368,13 +397,9 @@ class KeymapRegistry:
                             subcol = keymap_box.column(align=True)
                             subcol.active = False
 
+                        subcol.context_pointer_set("keymap", target_km)
                         # draw_kmiで標準UI表示
-                        draw_kmi([], kc, km, kmi, subcol, 0)
-
-                        # # 説明文を表示
-                        # if keymap_def.description:
-                        #     desc_row = subcol.row()
-                        #     desc_row.label(text=f"説明: {keymap_def.description}")
+                        draw_kmi([], target_kc, target_km, kmi, subcol, 0)
                     else:
                         # kmiが見つからない場合
                         error_row = keymap_box.row(align=True)

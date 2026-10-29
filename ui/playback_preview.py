@@ -201,17 +201,13 @@ class PlaybackPreviewSettings(PropertyGroup):
         )
 
 
-def draw_dopesheet_header(self, context):
-    if not is_header_tool_visible(context, "show_dopesheet_playback_preview"):
-        return
-
+def draw_playback_preview(layout, context):
+    """Clean animation preview のトグルボタンを描画"""
     try:
         prefs = get_prefs(context)
         preview_settings = prefs.playback_preview
     except Exception:
         return
-    layout = self.layout
-    layout.separator()
     layout.prop(
         preview_settings,
         "enable_viewport_features",
@@ -219,6 +215,13 @@ def draw_dopesheet_header(self, context):
         icon="SHADERFX",
         toggle=True,
     )
+
+
+def draw_dopesheet_header(self, context):
+    if not is_header_tool_visible(context, "show_dopesheet_playback_preview"):
+        return
+    self.layout.separator()
+    draw_playback_preview(self.layout, context)
 
 
 def _apply_initial_state():

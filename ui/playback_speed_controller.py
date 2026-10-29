@@ -18,7 +18,8 @@ from bpy.props import FloatProperty
 from bpy.types import Operator, Panel, Scene
 
 from ..utils.ui_utils import ic
-from .header_tools import get_playback_speed_visible
+from .header_tools import get_playback_preview_visible, get_playback_speed_visible
+from .playback_preview import draw_playback_preview
 
 
 DEFAULT_SPEED = 1.0
@@ -308,7 +309,10 @@ def draw_control_buttons(layout, scene):
 
 def draw_ui(self, context):
     """メインのUI描画関数（Header の draw からも、layout を渡す形でも使う）"""
-    if not get_playback_speed_visible(context):
+    show_speed = get_playback_speed_visible(context)
+    show_preview = get_playback_preview_visible(context)
+
+    if not show_speed and not show_preview:
         return
 
     # Graph Editor の Drivers モードはフッターがドライバー情報欄になるので出さない
@@ -320,21 +324,27 @@ def draw_ui(self, context):
 
     row = layout.row(align=True)
 
-    # ボタンの状態をチェック
-    button_state, _ = PlaybackSpeedUI.get_store_button_state(scene)
-    speed_change_blocked = PlaybackSpeedUI.should_block_speed_change(button_state)
+    if show_speed:
+        # ボタンの状態をチェック
+        button_state, _ = PlaybackSpeedUI.get_store_button_state(scene)
+        speed_change_blocked = PlaybackSpeedUI.should_block_speed_change(button_state)
 
-    # 速度スライダー
-    draw_speed_slider(row, scene, enabled=not speed_change_blocked)
+        # 速度スライダー
+        draw_speed_slider(row, scene, enabled=not speed_change_blocked)
 
-    # プリセットボタン
-    draw_preset_buttons(row, scene, enabled=not speed_change_blocked)
+        # プリセットボタン
+        draw_preset_buttons(row, scene, enabled=not speed_change_blocked)
 
-    # セパレーター
-    row.separator()
+        # セパレーター
+        row.separator()
 
-    # 制御ボタン
-    draw_control_buttons(row, scene)
+        # 制御ボタン
+        draw_control_buttons(row, scene)
+
+    if show_preview:
+        if show_speed:
+            row.separator()
+        draw_playback_preview(row, context)
 
 
 # ===== イベントハンドラー =====
@@ -368,6 +378,16 @@ def _find_playback_controls_modules():
     return modules
 
 
+def _unwrap_playback_controls(func):
+    """既存の patched_playback_controls ラッパーを剥がして元関数を取り出す"""
+    while getattr(func, "_monkey_playback_patch", False):
+        raw = getattr(func, "_monkey_raw_func", None)
+        if raw is None or raw is func:
+            break
+        func = raw
+    return func
+
+
 def _insert_after_playback_popover(module, draw_func):
     """
     bl_ui.space_time.playback_controls を包み、Playback ポップオーバーの直後に
@@ -375,13 +395,14 @@ def _insert_after_playback_popover(module, draw_func):
     各モジュールの参照も差し替える。何度呼んでも元実装は 1 回しか保持しない。
     """
     module_name = getattr(module, "__name__", "")
-    original = _ORIGINAL_PLAYBACK_FUNCS.get(module_name)
-    if original is None:
-        original = module.playback_controls
-        _ORIGINAL_PLAYBACK_FUNCS[module_name] = original
+    raw_func = _unwrap_playback_controls(module.playback_controls)
+    _ORIGINAL_PLAYBACK_FUNCS[module_name] = raw_func
 
-    def patched_playback_controls(layout, context, _orig=original):
+    def patched_playback_controls(layout, context, _orig=raw_func):
         _orig(_CenteredLayoutProxy(_LayoutProxy(layout, draw_func, context)), context)
+
+    patched_playback_controls._monkey_playback_patch = True
+    patched_playback_controls._monkey_raw_func = raw_func
 
     module.playback_controls = patched_playback_controls
     if module_name not in _PATCHED_MODULES:
@@ -454,8 +475,8 @@ def unregister():
 
     for name in _PATCHED_MODULES:
         module = sys.modules.get(name)
-        if module is not None and name in _ORIGINAL_PLAYBACK_FUNCS:
-            module.playback_controls = _ORIGINAL_PLAYBACK_FUNCS[name]
+        if module is not None and hasattr(module, "playback_controls"):
+            module.playback_controls = _unwrap_playback_controls(module.playback_controls)
     _PATCHED_MODULES.clear()
     _ORIGINAL_PLAYBACK_FUNCS.clear()
 

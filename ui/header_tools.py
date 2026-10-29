@@ -96,6 +96,14 @@ def get_playback_speed_visible(context) -> bool:
     return tools.show_playback_speed
 
 
+def get_playback_preview_visible(context) -> bool:
+    """再生コントロールフッターのプレビュー切り替えの表示設定を取得"""
+    tools = get_header_tools(context)
+    if tools is None:
+        return True
+    return getattr(tools, "show_playback_preview", True)
+
+
 class HeaderToolsSettings(PropertyGroup):
     """ヘッダーツールの表示切り替え設定"""
 
@@ -123,6 +131,12 @@ class HeaderToolsSettings(PropertyGroup):
     show_playback_speed: BoolProperty(
         name="Playback Speed Controller",
         description="Show playback speed controls in the playback controls footer",
+        default=True,
+        update=_on_setting_update,
+    )
+    show_playback_preview: BoolProperty(
+        name="Playback Viewport Preview",
+        description="Show clean playback preview toggle in the playback controls footer",
         default=True,
         update=_on_setting_update,
     )
@@ -173,6 +187,7 @@ class HeaderToolsSettings(PropertyGroup):
         col.label(text=_("HEADER_TOOLS_PLAYBACK_CONTROLS"), icon=ic("PLAY"))
         box = col.box()
         box.prop(self, "show_playback_speed", text=_("HEADER_TOOLS_PLAYBACK_SPEED"))
+        box.prop(self, "show_playback_preview", text=_("HEADER_TOOLS_PLAYBACK_PREVIEW"))
 
         # Dope Sheet
         col = layout.column(align=True)

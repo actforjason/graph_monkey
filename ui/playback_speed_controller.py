@@ -302,6 +302,12 @@ def draw_control_buttons(layout, scene):
     # ストアボタン
     control_row.operator("scene.store_original_range", text="", icon=store_icon)
 
+    # 速度変化中はキーフレーム再整列ボタンを表示
+    if abs(scene.playback_speed - DEFAULT_SPEED) > SPEED_TOLERANCE:
+        control_row.operator(
+            "anim.monkey_snap_keyframes_to_speed", text="", icon=ic("SNAP_ON")
+        )
+
     # リセットボタン
     reset_icon = PlaybackSpeedUI.get_reset_button_icon(scene)
     control_row.operator("scene.reset_speed", text="", icon=reset_icon)

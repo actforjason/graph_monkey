@@ -204,3 +204,105 @@ def get_remapped_allowed_frames_cached(
 
     remapped = {int(round(f * ratio)) for f in raw_frames}
     return sorted(remapped)
+
+
+def get_action_fcurves(action: Any) -> List[Any]:
+    """Action から FCurve を取得（Blender 4.x / 5.x 両対応）。"""
+    if not action:
+        return []
+    if hasattr(action, "fcurves") and action.fcurves is not None:
+        try:
+            return list(action.fcurves)
+        except (TypeError, AttributeError):
+            pass
+
+    if hasattr(action, "layers"):
+        fcurves = []
+        for layer in getattr(action, "layers", []):
+            for strip in getattr(layer, "strips", []):
+                if hasattr(strip, "channelbags"):
+                    for bag in strip.channelbags:
+                        fcurves.extend(getattr(bag, "fcurves", []))
+                elif hasattr(strip, "channelbag") and strip.channelbag:
+                    fcurves.extend(getattr(strip.channelbag, "fcurves", []))
+        if fcurves:
+            return fcurves
+
+    return []
+
+
+def get_context_actions(context: Context) -> List[Any]:
+    """現在編集対象となっている Action の一覧を取得。"""
+    actions: List[Any] = []
+    seen: Set[Any] = set()
+
+    def add_action(act: Any) -> None:
+        if act and act not in seen:
+            seen.add(act)
+            actions.append(act)
+
+    targets = []
+    if context.active_object:
+        targets.append(context.active_object)
+    if getattr(context, "selected_objects", None):
+        targets.extend(context.selected_objects)
+
+    for obj in targets:
+        anim_data = getattr(obj, "animation_data", None)
+        if anim_data and anim_data.action:
+            add_action(anim_data.action)
+
+    active_act = getattr(context, "active_action", None)
+    if active_act:
+        add_action(active_act)
+
+    return actions
+
+
+def remap_action_keyframes(
+    action: Any,
+    source_frame: float,
+    target_frame: float,
+) -> int:
+    """Action 内の source_frame にあるキーフレームを target_frame に移動・統合する。"""
+    if not action or abs(source_frame - target_frame) < 1e-4:
+        return 0
+
+    fcurves = get_action_fcurves(action)
+    if not fcurves:
+        return 0
+
+    shift = target_frame - source_frame
+    count = 0
+
+    for fc in fcurves:
+        pt_cur = next(
+            (p for p in fc.keyframe_points if abs(p.co[0] - source_frame) < 1e-4),
+            None,
+        )
+        if not pt_cur:
+            continue
+
+        pt_target = next(
+            (p for p in fc.keyframe_points if abs(p.co[0] - target_frame) < 1e-4),
+            None,
+        )
+
+        if pt_target and pt_target != pt_cur:
+            pt_target.co[1] = pt_cur.co[1]
+            pt_target.interpolation = pt_cur.interpolation
+            pt_target.easing = pt_cur.easing
+            pt_target.handle_left[0] = pt_cur.handle_left[0] + shift
+            pt_target.handle_left[1] = pt_cur.handle_left[1]
+            pt_target.handle_right[0] = pt_cur.handle_right[0] + shift
+            pt_target.handle_right[1] = pt_cur.handle_right[1]
+            fc.keyframe_points.remove(pt_cur)
+        else:
+            pt_cur.handle_left[0] += shift
+            pt_cur.handle_right[0] += shift
+            pt_cur.co[0] = float(target_frame)
+
+        fc.update()
+        count += 1
+
+    return count
